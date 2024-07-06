@@ -44,19 +44,17 @@ sub versioncomp {
 	} else {
 		return -1;
 	}
-
 }
 
 sub sync {
 	my $json = JSON::PP->new->ascii->pretty->allow_nonref;
 	my $json_text = `curl -s --raw https://ziglang.org/download/index.json`;
-
 	my $res = $json->decode( $json_text );
 
 	unless (-e $cache_dir) {
 		make_path(".cache");
 	}
-	unless(-e $version_file) {
+	unless (-e $version_file) {
 		open my $fc, ">", $version_file;
 		close $fc;
 	}
@@ -71,7 +69,10 @@ sub sync {
 }
 
 sub install {
-	my $ver = $ARGV[1];
+	my $ver = $ARGV[1] or do {
+		print "Usage: zup install [version]\n";
+		return -1;
+	};
 	my $url = getCachedVersion($ver);
 	my $ff = File::Fetch->new(uri => $url);
 	my $file = $ff->fetch() or die $ff->error;
@@ -92,7 +93,10 @@ sub install {
 }
 
 sub useVersion {
-	my $ver = $ARGV[1];
+	my $ver = $ARGV[1] or do {
+		print "Usage: zup use [version]\n";
+		return -1;
+	};
 	my $url = getCachedVersion($ver);
 	my $source = File::Spec->rel2abs("$cache_dir/$ver/zig");
 	my $link = File::Spec->rel2abs("bin/zig");
