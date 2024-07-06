@@ -1,0 +1,1 @@
+# zup - Zig version manager

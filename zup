@@ -1,0 +1,152 @@
+#!/usr/bin/perl
+use warnings;
+use strict;
+use 5.010;
+use File::Fetch;
+use File::Spec;
+use File::Basename;
+use File::Path qw(make_path remove_tree);
+use JSON::PP;
+use version;
+
+my $cache_dir = '.cache';
+my $version_file = '.cache/versions';
+
+sub printHelp {
+	print qq{Usage: zup [command] [arguments]
+  sync
+  list
+  install [version]
+  use [version]
+
+};
+}
+
+sub getCachedVersion {
+	open(FH, '<', $version_file) or die $!;
+	while(<FH>) {
+		my ($ver, $url, $status) = split ' ';
+		if ($ver eq $_[0]) {
+			close(FH);
+			return $url;
+		}
+	}
+}
+
+sub versioncomp {
+	if ($a eq "master") {
+		return -1;
+	} elsif ($b eq "master") {
+		return 1;
+	}
+	if (version->parse($a) < version->parse($b)) {
+		return 1;
+	} else {
+		return -1;
+	}
+
+}
+
+sub sync {
+	my $json = JSON::PP->new->ascii->pretty->allow_nonref;
+	my $json_text = `curl -s --raw https://ziglang.org/download/index.json`;
+
+	my $res = $json->decode( $json_text );
+
+	unless (-e $cache_dir) {
+		make_path(".cache");
+	}
+	unless(-e $version_file) {
+		open my $fc, ">", $version_file;
+		close $fc;
+	}
+	open(FH, '>', $version_file) or die $!;
+	foreach my $key(sort versioncomp (keys %$res)) {
+		my $url = $res->{$key}->{'x86_64-linux'}->{'tarball'};
+		if ($url) {
+			printf(FH "%s %s\n", $key, $url);
+		}
+	}
+	close(FH);
+}
+
+sub install {
+	my $ver = $ARGV[1];
+	my $url = getCachedVersion($ver);
+	my $ff = File::Fetch->new(uri => $url);
+	my $file = $ff->fetch() or die $ff->error;
+	my $sf = File::Fetch->new(uri => "$url.minisig");
+	my $sig = $sf->fetch() or die $ff->error;
+	
+	my $pkey = "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U";
+        `minisign -q -V -m $file -P $pkey`;
+	if ($? != 0) {
+		die "Signature verification failed";
+	} else {
+		printf "Signature OK. Installing..\n";
+		make_path(".cache/$ver");
+		`tar -xf $file -C .cache/$ver --strip-components=1`;
+		unlink($file);
+		unlink($sig);
+	}
+}
+
+sub useVersion {
+	my $ver = $ARGV[1];
+	my $url = getCachedVersion($ver);
+	my $source = File::Spec->rel2abs("$cache_dir/$ver/zig");
+	my $link = File::Spec->rel2abs("bin/zig");
+	if (-e ".cache/$ver") {
+		if (-e $link) {
+			unlink $link;
+		}
+		`ln -s $source $link`;
+	} else {
+		printf "Version %s is not installed, run 'zup install %s' first.\n", 
+		$ver, $ver;
+	}
+}
+
+sub getStatus {
+	my $in_ver = $_[0];
+	if (-e "bin/zig") {
+		my ($name,$path) = fileparse(readlink("bin/zig"));
+		$path = basename($path);
+		if ($in_ver eq $path) {
+			return "[Current]";
+		}
+	}
+	elsif (-e "$cache_dir/$in_ver") {
+		return "[Installed]";
+	}
+	return "";
+}
+
+sub list {
+	unless (-e $version_file) {
+		printf "Please run 'zup sync'\n";
+		return 0;
+	}
+
+	open(FH, '<', $version_file) or die $!;
+	while (<FH>) {
+		my ($ver, $url) = split ' ';
+		my $status = getStatus($ver);
+		printf "%s %s\n", $ver, $status;
+	}
+}
+
+
+my ($action) = @ARGV;
+
+if (@ARGV == 0 or $action eq "help") {
+	printHelp;
+} elsif ($action eq "use") {
+	useVersion;
+} elsif ($action eq "install") {
+	install;
+} elsif ($action eq "sync") {
+	sync;
+} elsif ($action eq "list") {
+	list;
+}
