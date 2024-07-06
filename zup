@@ -8,6 +8,7 @@ use File::Basename;
 use File::Path qw(make_path remove_tree);
 use JSON::PP;
 use version;
+use IPC::Open3 qw(open3);
 
 my $cache_dir = '.cache';
 my $version_file = '.cache/versions';
@@ -68,11 +69,26 @@ sub sync {
 	close(FH);
 }
 
+sub cmdAvailable {
+	my @command = "which $_[0]";
+	my $pid = open3(\*CIN, \*COUT, \*COUT, @command);
+	waitpid($pid, 0);
+	my $exit = $? >> 8;
+	close CIN;
+	close COUT;
+	return ($exit == 0);
+}
+
 sub install {
 	my $ver = $ARGV[1] or do {
 		print "Usage: zup install [version]\n";
 		return -1;
 	};
+	unless (cmdAvailable "minisign") {
+		print "minisign not found\n";
+		return -1;
+	}
+
 	my $url = getCachedVersion($ver);
 	my $ff = File::Fetch->new(uri => $url);
 	my $file = $ff->fetch() or die $ff->error;
@@ -110,6 +126,7 @@ sub useVersion {
 
 sub getStatus {
 	my $in_ver = $_[0];
+
 	if (-e "bin/zig") {
 		my ($name,$path) = fileparse(readlink("bin/zig"));
 		$path = basename($path);
@@ -117,7 +134,7 @@ sub getStatus {
 			return "[Current]";
 		}
 	}
-	elsif (-e "$cache_dir/$in_ver") {
+	if (-e "$cache_dir/$in_ver") {
 		return "[Installed]";
 	}
 	return "";
