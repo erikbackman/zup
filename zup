@@ -101,10 +101,7 @@ sub useVersion {
 	my $source = File::Spec->rel2abs("$cache_dir/$ver/zig");
 	my $link = File::Spec->rel2abs("bin/zig");
 	if (-e ".cache/$ver") {
-		if (-e $link) {
-			unlink $link;
-		}
-		`ln -s $source $link`;
+		`ln -sf $source $link`;
 	} else {
 		printf "Version %s is not installed, run 'zup install %s' first.\n", 
 		$ver, $ver;
