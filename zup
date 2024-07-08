@@ -47,6 +47,15 @@ sub versioncomp {
 	}
 }
 
+sub checkForZLS {
+	my $in_ver = $_[0];
+	my $url = "https://github.com/zigtools/zls/releases/tag/$in_ver/zls-x86_64-linux.tar.xz";
+	if ((substr `curl -Is $url`,0, 10) =~ "HTTP/2 200") {
+                return "https://github.com/zigtools/zls/releases/download/$in_ver/zls-x86_64-linux.tar.xz"
+	}
+	return "";
+}
+
 sub sync {
 	my $json = JSON::PP->new->ascii->pretty->allow_nonref;
 	my $json_text = `curl -s --raw https://ziglang.org/download/index.json`;
@@ -105,6 +114,19 @@ sub install {
 		`tar -xf $file -C .cache/$ver --strip-components=1`;
 		unlink($file);
 		unlink($sig);
+		my $zlsURL = checkForZLS($ver);
+		if ($zlsURL ne "") {
+			printf "ZLS available, install? y/n: ";
+			my $input = <STDIN>;
+			chomp($input);
+			if ($input eq "y") {
+				my $ff = File::Fetch->new(uri => $zlsURL);
+				my $zls = $ff->fetch() or die $ff->error;
+				`tar -xf $zls -C .cache/$ver`;
+				unlink($zls);
+			}
+		}
+		printf "Done\n";
 	}
 }
 
@@ -114,9 +136,9 @@ sub useVersion {
 		return -1;
 	};
 	my $url = getCachedVersion($ver);
-	my $source = File::Spec->rel2abs("$cache_dir/$ver/zig");
-	my $link = File::Spec->rel2abs("bin/zig");
 	if (-e ".cache/$ver") {
+		my $source = File::Spec->rel2abs("$cache_dir/$ver");
+		my $link = File::Spec->rel2abs("bin");
 		`ln -sf $source $link`;
 	} else {
 		printf "Version %s is not installed, run 'zup install %s' first.\n", 
@@ -128,9 +150,8 @@ sub getStatus {
 	my $in_ver = $_[0];
 
 	if (-e "bin/zig") {
-		my ($name,$path) = fileparse(readlink("bin/zig"));
-		$path = basename($path);
-		if ($in_ver eq $path) {
+		my ($name,$path) = fileparse(readlink("bin"));
+		if ($in_ver eq $name) {
 			return "[Current]";
 		}
 	}
@@ -167,4 +188,4 @@ if (@ARGV == 0 or $action eq "help") {
 	sync;
 } elsif ($action eq "list") {
 	list;
-}
+} 
