@@ -6,6 +6,7 @@ use File::Fetch;
 use File::Spec;
 use File::Basename;
 use File::Path qw(make_path remove_tree);
+use File::Temp qw(tempdir);
 use JSON::PP;
 use version;
 use IPC::Open3 qw(open3);
@@ -49,11 +50,14 @@ sub versioncomp {
 
 sub checkForZLS {
 	my $in_ver = $_[0];
-	my $url = "https://github.com/zigtools/zls/releases/tag/$in_ver/zls-x86_64-linux.tar.xz";
-	if ((substr `curl -Is $url`,0, 10) =~ "HTTP/2 200") {
-                return "https://github.com/zigtools/zls/releases/download/$in_ver/zls-x86_64-linux.tar.xz"
+	my $url = "https://github.com/zigtools/zls/releases/download/$in_ver/zls-x86_64-linux.tar.xz";
+	my $status = (split /\n/, `curl -Is $url`)[0];
+	chomp($status);
+	if ($status !~ "HTTP/2 404") {
+		return $url;
+	} else {
+		return '';
 	}
-	return "";
 }
 
 sub sync {
@@ -98,11 +102,14 @@ sub install {
 		return -1;
 	}
 
+
+	my $dir = tempdir(cleanup => 1);
+
 	my $url = getCachedVersion($ver);
 	my $ff = File::Fetch->new(uri => $url);
-	my $file = $ff->fetch() or die $ff->error;
+	my $file = $ff->fetch(to => $dir) or die $ff->error;
 	my $sf = File::Fetch->new(uri => "$url.minisig");
-	my $sig = $sf->fetch() or die $ff->error;
+	my $sig = $sf->fetch(to => $dir) or die $ff->error;
 	
 	my $pkey = "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U";
         `minisign -q -V -m $file -P $pkey`;
@@ -112,18 +119,15 @@ sub install {
 		printf "Signature OK. Installing..\n";
 		make_path(".cache/$ver");
 		`tar -xf $file -C .cache/$ver --strip-components=1`;
-		unlink($file);
-		unlink($sig);
 		my $zlsURL = checkForZLS($ver);
-		if ($zlsURL ne "") {
+		if ($zlsURL ne '') {
 			printf "ZLS available, install? y/n: ";
 			my $input = <STDIN>;
 			chomp($input);
 			if ($input eq "y") {
 				my $ff = File::Fetch->new(uri => $zlsURL);
-				my $zls = $ff->fetch() or die $ff->error;
+				my $zls = $ff->fetch(to => $dir) or die $ff->error;
 				`tar -xf $zls -C .cache/$ver`;
-				unlink($zls);
 			}
 		}
 		printf "Done\n";
