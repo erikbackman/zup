@@ -1,195 +1,162 @@
-#!/usr/bin/perl
-use warnings;
-use strict;
-use 5.010;
-use File::Fetch;
-use File::Spec;
-use File::Basename;
-use File::Path qw(make_path remove_tree);
-use File::Temp qw(tempdir);
-use JSON::PP;
-use version;
-use IPC::Open3 qw(open3);
+#!/usr/bin/env php
+<?php
 
-my $cache_dir = '.cache';
-my $version_file = '.cache/versions';
+define("CACHE_DIR", __DIR__ . "/.cache");
+define("VERSION_FILE", CACHE_DIR . "/versions");
 
-sub printHelp {
-	print qq{Usage: zup [command] [arguments]
+function print_help() {
+	echo <<<HELP
+Usage: zup [command] [arguments]
   sync
   list
   install [version]
   use [version]
-
-};
+HELP;
 }
 
-sub getCachedVersion {
-	open(FH, '<', $version_file) or die $!;
-	while(<FH>) {
-		my ($ver, $url, $status) = split ' ';
-		if ($ver eq $_[0]) {
-			close(FH);
+function get_cached_version($want_ver) {
+	$fp = fopen(VERSION_FILE, "r");
+	while ($line = fgets($fp)) {
+		list($ver, $url) = explode(" ", trim($line));
+		if ($ver == $want_ver) {
+			fclose($fp);
 			return $url;
 		}
 	}
+	fclose($fp);
 }
 
-sub versioncomp {
-	if ($a eq "master") {
-		return -1;
-	} elsif ($b eq "master") {
-		return 1;
-	}
-	if (version->parse($a) < version->parse($b)) {
-		return 1;
-	} else {
-		return -1;
-	}
+function version_comp($a, $b) {
+	if ($a == "master") return -1;
+	if ($b == "master") return 1;
+	return version_compare($a, $b, "<") ? 1 : -1;
 }
 
-sub checkForZLS {
-	my $in_ver = $_[0];
-	my $url = "https://github.com/zigtools/zls/releases/download/$in_ver/zls-x86_64-linux.tar.xz";
-	my $status = (split /\n/, `curl -Is $url`)[0];
-	chomp($status);
-	if ($status !~ "HTTP/2 404") {
+function check_for_zls($in_ver) {
+	$url = "https://github.com/zigtools/zls/releases/download/{$in_ver}/zls-x86_64-linux.tar.xz";
+	$output = [];
+	exec("curl -Is {$url}", $output);
+	if ($output != "HTTP/2 404") {
 		return $url;
-	} else {
-		return '';
-	}
-}
-
-sub sync {
-	my $json = JSON::PP->new->ascii->pretty->allow_nonref;
-	my $json_text = `curl -s --raw https://ziglang.org/download/index.json`;
-	my $res = $json->decode( $json_text );
-
-	unless (-e $cache_dir) {
-		make_path(".cache");
-	}
-	unless (-e $version_file) {
-		open my $fc, ">", $version_file;
-		close $fc;
-	}
-	open(FH, '>', $version_file) or die $!;
-	foreach my $key(sort versioncomp (keys %$res)) {
-		my $url = $res->{$key}->{'x86_64-linux'}->{'tarball'};
-		if ($url) {
-			printf(FH "%s %s\n", $key, $url);
-		}
-	}
-	close(FH);
-}
-
-sub cmdAvailable {
-	my @command = "which $_[0]";
-	my $pid = open3(\*CIN, \*COUT, \*COUT, @command);
-	waitpid($pid, 0);
-	my $exit = $? >> 8;
-	close CIN;
-	close COUT;
-	return ($exit == 0);
-}
-
-sub install {
-	my $ver = $ARGV[1] or do {
-		print "Usage: zup install [version]\n";
-		return -1;
-	};
-	unless (cmdAvailable "minisign") {
-		print "minisign not found\n";
-		return -1;
-	}
-
-
-	my $dir = tempdir(cleanup => 1);
-
-	my $url = getCachedVersion($ver);
-	my $ff = File::Fetch->new(uri => $url);
-	my $file = $ff->fetch(to => $dir) or die $ff->error;
-	my $sf = File::Fetch->new(uri => "$url.minisig");
-	my $sig = $sf->fetch(to => $dir) or die $ff->error;
-	
-	my $pkey = "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U";
-        `minisign -q -V -m $file -P $pkey`;
-	if ($? != 0) {
-		die "Signature verification failed";
-	} else {
-		printf "Signature OK. Installing..\n";
-		make_path(".cache/$ver");
-		`tar -xf $file -C .cache/$ver --strip-components=1`;
-		my $zlsURL = checkForZLS($ver);
-		if ($zlsURL ne '') {
-			printf "ZLS available, install? y/n: ";
-			my $input = <STDIN>;
-			chomp($input);
-			if ($input eq "y") {
-				my $ff = File::Fetch->new(uri => $zlsURL);
-				my $zls = $ff->fetch(to => $dir) or die $ff->error;
-				`tar -xf $zls -C .cache/$ver`;
-			}
-		}
-		printf "Done\n";
-	}
-}
-
-sub useVersion {
-	my $ver = $ARGV[1] or do {
-		print "Usage: zup use [version]\n";
-		return -1;
-	};
-	my $url = getCachedVersion($ver);
-	if (-e ".cache/$ver") {
-		my $source = File::Spec->rel2abs("$cache_dir/$ver");
-		my $link = File::Spec->rel2abs("bin");
-		`ln -sf $source $link`;
-	} else {
-		printf "Version %s is not installed, run 'zup install %s' first.\n", 
-		$ver, $ver;
-	}
-}
-
-sub getStatus {
-	my $in_ver = $_[0];
-
-	if (-e "bin/zig") {
-		my ($name,$path) = fileparse(readlink("bin"));
-		if ($in_ver eq $name) {
-			return "[Current]";
-		}
-	}
-	if (-e "$cache_dir/$in_ver") {
-		return "[Installed]";
 	}
 	return "";
 }
 
-sub list {
-	unless (-e $version_file) {
-		printf "Please run 'zup sync'\n";
-		return 0;
+function sync() {
+	if (!is_dir(CACHE_DIR)) {
+		mkdir(CACHE_DIR);
 	}
 
-	open(FH, '<', $version_file) or die $!;
-	while (<FH>) {
-		my ($ver, $url) = split ' ';
-		my $status = getStatus($ver);
-		printf "%s %s\n", $ver, $status;
+	$versions = json_decode(file_get_contents("https://ziglang.org/download/index.json"), true);
+	uksort($versions, "version_comp");
+	$fp = fopen(VERSION_FILE, "w");
+	foreach ($versions as $key => $info) {
+		if (!empty($info["x86_64-linux"]["tarball"])) {
+			$url = $info["x86_64-linux"]["tarball"];
+			fwrite($fp, "{$key} {$url}\n");
+		}
+	}
+	fclose($fp);
+}
+
+function cmd_available($cmd) {
+	$return = -1;
+	system("which {$cmd} > /dev/null", $return);
+	return $return == 0;
+}
+
+function install($ver) {
+	if (!$ver) {
+		echo "Usage: zup install [version]\n";
+		exit(-1);
+	}
+	if (!cmd_available("minisign")) {
+		echo "minisign not found\n";
+		exit(-1);
+	}
+
+	$file = tempnam(sys_get_temp_dir(), "zup-");
+	$sf = $file . ".minisig";
+	$url = get_cached_version($ver);
+	file_put_contents($file, file_get_contents($url));
+	file_put_contents($sf, file_get_contents($url . ".minisig"));
+
+	$pkey = "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U";
+	$return = -1;
+	system("minisign -q -V -m {$file} -P {$pkey}", $return);
+	if ($return != 0) {
+		unlink($file);
+		unlink($sf);
+		die("Signature verification failed");
+	} else {
+		echo "Signature OK. Installing..\n";
+		$cache_dir = CACHE_DIR . "/{$ver}";
+		mkdir($cache_dir);
+		system("tar -xf {$file} -C {$cache_dir} --strip-components=1");
+		$zls_url = check_for_zls($ver);
+		if ($zls_url != "") {
+			$input = readline("ZLS available, install? y/n: ");
+			if ($input == "y") {
+				$zls_file = tempnam(sys_get_temp_dir(), "zup-zls-");
+				file_put_contents($zls_file, file_get_contents($zls_url));
+				system("tar -xf {$zls_file} -C {$cache_dir}");
+				unlink($zls_file);
+			}
+		}
+		echo "Done\n";
+	}
+	unlink($file);
+	unlink($sf);
+}
+
+function use_version($ver) {
+	if (!$ver) {
+		echo "Usage: zup use [version]\n";
+		exit(-1);
+	}
+	$url = get_cached_version($ver);
+	if (is_dir(CACHE_DIR . "/{$ver}")) {
+		$source = CACHE_DIR . "/{$ver}/";
+		$link = __DIR__  . "/bin";
+		system("ln -sfn {$source} {$link}");
+	} else {
+		echo "Version {$ver} is not installed, run 'zup install {$ver}' first.\n";
 	}
 }
 
+function get_status($ver) {
+	if (file_exists(__DIR__ . "/bin/zig")) {
+		if (basename(readlink(__DIR__ . "/bin")) == $ver) return "[Current]";
+	}
+	if (is_dir(CACHE_DIR . "/{$ver}")) return "[Installed]";
+	return "";
+}
 
-my ($action) = @ARGV;
+function list_versions() {
+	if (!file_exists(VERSION_FILE)) {
+		echo "Please run 'zup sync'\n";
+		exit(0);
+	}
 
-if (@ARGV == 0 or $action eq "help") {
-	printHelp;
-} elsif ($action eq "use") {
-	useVersion;
-} elsif ($action eq "install") {
-	install;
-} elsif ($action eq "sync") {
-	sync;
-} elsif ($action eq "list") {
-	list;
-} 
+	$fp = fopen(VERSION_FILE, "r");
+	while ($line = fgets($fp)) {
+		list($ver, $url) = explode(" ", trim($line));
+		$status = get_status($ver);
+		echo "{$ver} {$status}\n";
+	}
+	fclose($fp);
+}
+
+$action = $argv[1] ?? "help";
+
+if ($action == "help") {
+	print_help();
+} elseif ($action == "use") {
+	use_version($argv[2] ?? null);
+} elseif ($action == "install") {
+	install($argv[2] ?? null);
+} elseif ($action == "sync") {
+	sync();
+} elseif ($action == "list") {
+	list_versions();
+}
